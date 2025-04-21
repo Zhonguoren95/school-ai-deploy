@@ -3,7 +3,9 @@ import fitz  # PyMuPDF
 import docx2txt
 import pandas as pd
 import io
-from rapidfuzz import fuzz, process
+import shutil
+from rapidfuzz import fuzz
+from openpyxl import load_workbook
 
 st.set_page_config(page_title="AI-сервис подбора", layout="wide")
 st.title("🤖 AI-сервис подбора оборудования")
@@ -35,6 +37,7 @@ def read_prices(files):
     for f in files:
         try:
             df = pd.read_excel(f)
+            df['Поставщик'] = f.name
             dfs.append(df)
         except:
             st.warning(f"Не удалось прочитать файл: {f.name}")
@@ -60,6 +63,28 @@ def match_top_variants(spec_text, df_prices, top_n=3):
             matched['Из ТЗ'] = line
             results.append(matched)
     return pd.DataFrame(results)
+
+# Функция заполнения шаблона
+
+def generate_template_excel(df_result):
+    template_path = "Форма для результата.xlsx"
+    export_path = "Готовый_результат_по_шаблону.xlsx"
+    shutil.copy(template_path, export_path)
+    wb = load_workbook(export_path)
+    ws = wb.active
+    start_row = 4
+    for i, row in df_result.iterrows():
+        r = start_row + i
+        ws[f"A{r}"] = i + 1
+        ws[f"C{r}"] = row.get("Из ТЗ", "")
+        ws[f"D{r}"] = row.get("Наименование", row.get("Аналог", ""))
+        ws[f"E{r}"] = f"{row.get('Совпадение', '')}%"
+        ws[f"G{r}"] = row.get("Цена", "")
+        ws[f"K{r}"] = row.get("Ссылка", "")
+        ws[f"M{r}"] = row.get("Цена", "")
+        ws[f"N{r}"] = row.get("Поставщик", "")
+    wb.save(export_path)
+    return export_path
 
 # Кнопка запуска анализа
 if st.button("🚀 Запустить подбор"):
@@ -88,10 +113,11 @@ if st.button("🚀 Запустить подбор"):
 
                 st.dataframe(filtered_df.astype(str))
 
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                    filtered_df.to_excel(writer, index=False, sheet_name='Сопоставление')
-                st.download_button("📥 Скачать результат в Excel", output.getvalue(), file_name="подбор_результат.xlsx")
+                # Кнопка Excel по шаблону
+                if st.button("📄 Сформировать Excel по шаблону"):
+                    file_path = generate_template_excel(filtered_df)
+                    with open(file_path, "rb") as f:
+                        st.download_button("📥 Скачать файл по шаблону", data=f, file_name="Готовый_результат_по_шаблону.xlsx")
             else:
                 st.warning("Ничего не найдено для отображения.")
     else:
