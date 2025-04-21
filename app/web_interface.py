@@ -3,7 +3,7 @@ import fitz  # PyMuPDF
 import docx2txt
 import pandas as pd
 import io
-from rapidfuzz import fuzz
+from rapidfuzz import fuzz, process
 
 st.set_page_config(page_title="AI-сервис подбора", layout="wide")
 st.title("🤖 AI-сервис подбора оборудования")
@@ -40,25 +40,23 @@ def read_prices(files):
             st.warning(f"Не удалось прочитать файл: {f.name}")
     return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
 
-# Функция сопоставления позиций
-def match_positions(spec_text, df_prices):
+# Новая функция: несколько лучших совпадений
+
+def match_top_variants(spec_text, df_prices, top_n=3):
     results = []
     for line in spec_text.split("\n"):
         line = line.strip()
         if len(line) < 5:
             continue
-        best_match = None
-        best_score = 0
+        candidates = []
         for _, row in df_prices.iterrows():
-            for col in df_prices.columns:
-                if isinstance(row[col], str):
-                    score = fuzz.token_sort_ratio(line.lower(), row[col].lower())
-                    if score > best_score:
-                        best_score = score
-                        best_match = row
-        if best_match is not None and best_score > 60:
-            matched = best_match.to_dict()
-            matched['Совпадение'] = best_score
+            row_str = " ".join([str(v) for v in row.values if isinstance(v, str)])
+            score = fuzz.token_sort_ratio(line.lower(), row_str.lower())
+            candidates.append((score, row))
+        top_matches = sorted(candidates, key=lambda x: x[0], reverse=True)[:top_n]
+        for score, row in top_matches:
+            matched = row.to_dict()
+            matched['Совпадение'] = score
             matched['Из ТЗ'] = line
             results.append(matched)
     return pd.DataFrame(results)
@@ -77,13 +75,12 @@ if st.button("🚀 Запустить подбор"):
         st.dataframe(df_prices.astype(str).head(20))
 
         if not df_prices.empty and spec_text:
-            df_result = match_positions(spec_text, df_prices)
-            st.subheader("✅ Сопоставленные позиции")
+            df_result = match_top_variants(spec_text, df_prices, top_n=3)
+            st.subheader("✅ Сопоставленные позиции (до 3 вариантов на каждую)")
 
             if not df_result.empty:
-                # Фильтрация по совпадению и поиску
                 min_match = st.slider("Минимальный процент совпадения", 0, 100, 70)
-                keyword = st.text_input("🔍 Поиск по ключевому слову (например, 'стол')")
+                keyword = st.text_input("🔍 Поиск по ключевому слову")
 
                 filtered_df = df_result[df_result['Совпадение'] >= min_match]
                 if keyword:
