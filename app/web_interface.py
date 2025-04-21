@@ -6,9 +6,7 @@ import io
 import shutil
 from rapidfuzz import fuzz
 from openpyxl import load_workbook
-from PIL import Image
-import pytesseract
-import tempfile
+import requests
 
 st.set_page_config(page_title="AI-сервис подбора", layout="wide")
 st.title("🤖 AI-сервис подбора оборудования")
@@ -26,15 +24,23 @@ uploaded_prices = st.file_uploader("Загрузите 1 или нескольк
 st.header("💸 Скидки от поставщиков (по желанию)")
 discounts_file = st.file_uploader("Файл со скидками (Excel)", type=["xlsx"], accept_multiple_files=False)
 
-# Функция OCR для PDF
-def extract_text_with_ocr(file):
-    text = ""
-    pdf_doc = fitz.open(stream=file.read(), filetype="pdf")
-    for page in pdf_doc:
-        pix = page.get_pixmap(dpi=300)
-        img = Image.open(io.BytesIO(pix.tobytes("png")))
-        text += pytesseract.image_to_string(img, lang='rus') + "\n"
-    return text
+# OCR API (через ocr.space)
+def extract_text_ocr_api(file_bytes):
+    url = 'https://api.ocr.space/parse/image'
+    response = requests.post(
+        url,
+        files={"file": file_bytes},
+        data={
+            "apikey": "K86918490388957",
+            "language": "rus",
+            "isOverlayRequired": False,
+        },
+    )
+    try:
+        result = response.json()
+        return result["ParsedResults"][0]["ParsedText"]
+    except:
+        return ""
 
 # Функция обработки ТЗ
 def extract_text_from_spec(file):
@@ -44,11 +50,11 @@ def extract_text_from_spec(file):
             text = "".join([page.get_text() for page in pdf_doc])
             if len(text.strip()) < 10:
                 file.seek(0)
-                return extract_text_with_ocr(file)
+                return extract_text_ocr_api(file)
             return text
         except:
             file.seek(0)
-            return extract_text_with_ocr(file)
+            return extract_text_ocr_api(file)
     elif file.name.endswith(".docx"):
         return docx2txt.process(file)
     return ""
