@@ -6,6 +6,9 @@ import io
 import shutil
 from rapidfuzz import fuzz
 from openpyxl import load_workbook
+from PIL import Image
+import pytesseract
+import tempfile
 
 st.set_page_config(page_title="AI-сервис подбора", layout="wide")
 st.title("🤖 AI-сервис подбора оборудования")
@@ -19,31 +22,62 @@ uploaded_spec = st.file_uploader("Загрузите файл с ТЗ (PDF, DOCX
 st.header("📊 Прайсы поставщиков")
 uploaded_prices = st.file_uploader("Загрузите 1 или несколько прайсов (Excel)", type=["xlsx"], accept_multiple_files=True)
 
+# Блок загрузки скидок
+st.header("💸 Скидки от поставщиков (по желанию)")
+discounts_file = st.file_uploader("Файл со скидками (Excel)", type=["xlsx"], accept_multiple_files=False)
+
+# Функция OCR для PDF
+def extract_text_with_ocr(file):
+    text = ""
+    pdf_doc = fitz.open(stream=file.read(), filetype="pdf")
+    for page in pdf_doc:
+        pix = page.get_pixmap(dpi=300)
+        img = Image.open(io.BytesIO(pix.tobytes("png")))
+        text += pytesseract.image_to_string(img, lang='rus') + "\n"
+    return text
+
 # Функция обработки ТЗ
 def extract_text_from_spec(file):
     if file.name.endswith(".pdf"):
-        text = ""
-        pdf_doc = fitz.open(stream=file.read(), filetype="pdf")
-        for page in pdf_doc:
-            text += page.get_text()
-        return text
+        try:
+            pdf_doc = fitz.open(stream=file.read(), filetype="pdf")
+            text = "".join([page.get_text() for page in pdf_doc])
+            if len(text.strip()) < 10:
+                file.seek(0)
+                return extract_text_with_ocr(file)
+            return text
+        except:
+            file.seek(0)
+            return extract_text_with_ocr(file)
     elif file.name.endswith(".docx"):
         return docx2txt.process(file)
     return ""
 
-# Функция чтения прайсов
+# Функция чтения прайсов с автоматическим поиском заголовков
 def read_prices(files):
     dfs = []
     for f in files:
         try:
-            df = pd.read_excel(f)
-            df['Поставщик'] = f.name
-            dfs.append(df)
+            df_raw = pd.read_excel(f, header=None)
+            header_row = df_raw.apply(lambda x: x.astype(str).str.contains("артикул|наименование|номенклатура", case=False).any(), axis=1)
+            if header_row.any():
+                idx = header_row.idxmax()
+                df = pd.read_excel(f, skiprows=idx)
+                df['Поставщик'] = f.name
+                dfs.append(df)
         except:
             st.warning(f"Не удалось прочитать файл: {f.name}")
     return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
 
-# Новая функция: несколько лучших совпадений
+# Загрузка скидок
+
+def load_discounts(discount_file):
+    if discount_file:
+        df = pd.read_excel(discount_file)
+        return dict(zip(df.iloc[:, 0].astype(str), df.iloc[:, 1]))
+    return {}
+
+# Поиск лучших совпадений
 
 def match_top_variants(spec_text, df_prices, top_n=3):
     results = []
@@ -64,9 +98,9 @@ def match_top_variants(spec_text, df_prices, top_n=3):
             results.append(matched)
     return pd.DataFrame(results)
 
-# Функция заполнения шаблона
+# Генерация Excel
 
-def generate_template_excel(df_result):
+def generate_template_excel(df_result, discounts):
     template_path = "Форма для результата.xlsx"
     export_path = "Готовый_результат_по_шаблону.xlsx"
     shutil.copy(template_path, export_path)
@@ -75,23 +109,33 @@ def generate_template_excel(df_result):
     start_row = 4
     for i, row in df_result.iterrows():
         r = start_row + i
+        price = row.get("Цена", 0)
+        qty = row.get("Количество", 1)
+        supplier = row.get("Поставщик", "")
+        discount = discounts.get(str(supplier), 0)
         ws[f"A{r}"] = i + 1
         ws[f"C{r}"] = row.get("Из ТЗ", "")
         ws[f"D{r}"] = row.get("Наименование", row.get("Аналог", ""))
         ws[f"E{r}"] = f"{row.get('Совпадение', '')}%"
-        ws[f"G{r}"] = row.get("Цена", "")
+        ws[f"F{r}"] = qty
+        ws[f"G{r}"] = price
+        ws[f"H{r}"] = f"=G{r}*F{r}"
         ws[f"K{r}"] = row.get("Ссылка", "")
-        ws[f"M{r}"] = row.get("Цена", "")
-        ws[f"N{r}"] = row.get("Поставщик", "")
+        ws[f"M{r}"] = price
+        ws[f"N{r}"] = supplier
+        ws[f"O{r}"] = discount
+        ws[f"P{r}"] = f"=H{r}*(1 - O{r}/100)"
     wb.save(export_path)
     return export_path
 
-# Кнопка запуска анализа
+# Запуск анализа
 if st.button("🚀 Запустить подбор"):
     if uploaded_spec and uploaded_prices:
         st.success("Файлы получены! Идёт обработка...")
 
         spec_text = extract_text_from_spec(uploaded_spec)
+        if not spec_text.strip():
+            st.error("Не удалось распознать текст из ТЗ. Проверьте формат файла.")
         st.subheader("📜 Распознанный текст из ТЗ")
         st.text_area("", spec_text, height=300)
 
@@ -113,9 +157,10 @@ if st.button("🚀 Запустить подбор"):
 
                 st.dataframe(filtered_df.astype(str))
 
-                # Кнопка Excel по шаблону
+                discounts = load_discounts(discounts_file)
+
                 if st.button("📄 Сформировать Excel по шаблону"):
-                    file_path = generate_template_excel(filtered_df)
+                    file_path = generate_template_excel(filtered_df, discounts)
                     with open(file_path, "rb") as f:
                         st.download_button("📥 Скачать файл по шаблону", data=f, file_name="Готовый_результат_по_шаблону.xlsx")
             else:
