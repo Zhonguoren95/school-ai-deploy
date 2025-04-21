@@ -75,15 +75,27 @@ if st.button("🚀 Запустить подбор"):
         df_prices = read_prices(uploaded_prices)
         st.subheader("📋 Объединённый прайс-лист")
         st.dataframe(df_prices.astype(str).head(20))
+
         if not df_prices.empty and spec_text:
             df_result = match_positions(spec_text, df_prices)
             st.subheader("✅ Сопоставленные позиции")
-            st.dataframe(df_result)
 
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df_result.to_excel(writer, index=False, sheet_name='Сопоставление')
-            st.download_button("📥 Скачать результат в Excel", output.getvalue(), file_name="подбор_результат.xlsx")
+            if not df_result.empty:
+                # Фильтрация по совпадению и поиску
+                min_match = st.slider("Минимальный процент совпадения", 0, 100, 70)
+                keyword = st.text_input("🔍 Поиск по ключевому слову (например, 'стол')")
+
+                filtered_df = df_result[df_result['Совпадение'] >= min_match]
+                if keyword:
+                    filtered_df = filtered_df[filtered_df.apply(lambda row: row.astype(str).str.contains(keyword, case=False).any(), axis=1)]
+
+                st.dataframe(filtered_df.astype(str))
+
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                    filtered_df.to_excel(writer, index=False, sheet_name='Сопоставление')
+                st.download_button("📥 Скачать результат в Excel", output.getvalue(), file_name="подбор_результат.xlsx")
+            else:
+                st.warning("Ничего не найдено для отображения.")
     else:
         st.warning("Пожалуйста, загрузите и ТЗ, и хотя бы один прайс.")
-
