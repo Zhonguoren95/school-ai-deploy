@@ -74,8 +74,7 @@ if st.button("🚀 Запустить подбор"):
 
         df_prices = read_prices(uploaded_prices)
         st.subheader("📋 Объединённый прайс-лист")
-        st.dataframe(df_prices.head(20))
-
+        st.dataframe(df_prices.astype(str).head(20))
         if not df_prices.empty and spec_text:
             df_result = match_positions(spec_text, df_prices)
             st.subheader("✅ Сопоставленные позиции")
